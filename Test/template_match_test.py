@@ -4,6 +4,10 @@ import time
 from pathlib import Path
 import re
 from tqdm import tqdm
+import cv2
+# 导入您提供的拼接器类和拼接顺序生成器
+from fry_project_classes.stitch_img_template_match import ImageStitcherTemplateMatch
+from fry_project_classes.get_full_stitch_order import get_full_stitch_order
 
 # 导入您提供的拼接器类
 from fry_project_classes.stitch_img_template_match import ImageStitcherTemplateMatch
@@ -19,94 +23,89 @@ def natural_sort_key(s):
 def stitch_img(IMAGE_DIR, OUTPUT_DIR, NUM_COLS: int, NUM_ROWS: int,
                ESTIMATE_OVERLAP_HORIZONTAL_PIXELS: int, ESTIMATE_OVERLAP_VERTICAL_PIXELS: int,
                BLEND_TYPE: str, LIGHT_COMPENSATION: bool,
-               DEBUG_MODE: bool):
-    OUTPUT_DIR.mkdir(exist_ok=True)  # 创建输出文件夹
-
-    # --- 2. 加载并排序图片 ---
+               DEBUG_MODE: bool, BLEND_RATIO: float, LIGHT_COMPENSATION_WIDTH: int):
+    OUTPUT_DIR.mkdir(exist_ok=True)
 
     print("--- 图像拼接开始 ---")
     print(f"配置: {NUM_ROWS}行 x {NUM_COLS}列")
     print(f"图片目录: {IMAGE_DIR}")
     print(f"输出目录: {OUTPUT_DIR}")
     print(f"水平重叠预估: {ESTIMATE_OVERLAP_HORIZONTAL_PIXELS}px, 垂直重叠预估: {ESTIMATE_OVERLAP_VERTICAL_PIXELS}px")
-    print(f"融合模式: {BLEND_TYPE}, 光照补偿: {'启用' if LIGHT_COMPENSATION else '禁用'}")
+    print(f"融合模式: {BLEND_TYPE}, 权重: {BLEND_RATIO}")
+    print(f"光照补偿: {'启用' if LIGHT_COMPENSATION else '禁用'}, 补偿宽度: {LIGHT_COMPENSATION_WIDTH}px")
 
-    # --- 2. 加载并排序图片 ---
+    # --- 1. 加载并排序所有图片 ---
     image_paths = sorted(list(IMAGE_DIR.glob("*.jpg")), key=natural_sort_key)
 
     if len(image_paths) != NUM_COLS * NUM_ROWS:
         print(f"错误: 找到 {len(image_paths)} 张图片, 但预期需要 {NUM_COLS * NUM_ROWS} 张。")
         return
 
-    # --- 3. 阶段一：水平拼接每一行 ---
-    stitched_rows = []
-    print("\n--- 阶段一: 水平拼接每一行 ---")
+    # 将所有图片读入内存，并用一个字典存储
+    images_dict = {}
+    for i, path in enumerate(image_paths):
+        img = cv2.imread(str(path))
+        if img is None:
+            print(f"错误: 无法读取图片 {path}")
+            return
+        # 使用从 '1' 开始的字符串作为键，模仿 stitch_worker.py 的行为
+        images_dict[str(i + 1)] = img
 
-    for i in tqdm(range(NUM_ROWS), desc="处理行"):
-        row_start_index = i * NUM_COLS
-        row_image_paths = image_paths[row_start_index: row_start_index + NUM_COLS]
+    # --- 2. 获取拼接顺序 ---
+    full_stitch_order_dict = get_full_stitch_order(NUM_ROWS, NUM_COLS)
+    print(f"\n--- 获取到 {len(full_stitch_order_dict)} 步拼接指令 ---")
 
-        # 加载行的第一张图片
-        current_row_image = cv2.imread(str(row_image_paths[0]))
-        if current_row_image is None:
-            print(f"错误: 无法读取图片 {row_image_paths[0]}")
-            continue
+    # --- 3. 按照指令集执行拼接 ---
+    final_image = None
+    progress_bar = tqdm(full_stitch_order_dict.items(), desc="执行拼接")
 
-        # 依次将该行的后续图片拼接到右侧
-        for j in range(1, NUM_COLS):
-            # 为每次拼接实例化一个新的Stitcher对象，以隔离调试文件夹
-            stitcher_h = ImageStitcherTemplateMatch(
-                estimate_overlap_pixels=ESTIMATE_OVERLAP_HORIZONTAL_PIXELS,
-                stitch_type="horizontal",
-                blend_type=BLEND_TYPE,
-                light_uniformity_compensation_enabled=LIGHT_COMPENSATION,
-                light_uniformity_compensation_width=30,  # 光照补偿的计算宽度
-                debug=DEBUG_MODE,
-                debug_dir=str(OUTPUT_DIR / f'debug_h_row{i + 1}_col{j}vs{j + 1}')
-            )
+    for step, (round_num, img1_name, img2_name, direction, result_name) in progress_bar:
+        progress_bar.set_description(f"步骤 {step}: {img1_name} + {img2_name} -> {result_name}")
 
-            next_image = cv2.imread(str(row_image_paths[j]))
-            if next_image is None:
-                print(f"错误: 无法读取图片 {row_image_paths[j]}")
-                break
+        img1 = images_dict[img1_name]
+        img2 = images_dict[img2_name]
 
-            current_row_image = stitcher_h.stitch_main(current_row_image, next_image)
+        # 根据方向选择重叠像素
+        overlap_pixels = 0
+        if direction == 'horizontal':
+            overlap_pixels = ESTIMATE_OVERLAP_HORIZONTAL_PIXELS
+        elif direction == 'vertical':
+            overlap_pixels = ESTIMATE_OVERLAP_VERTICAL_PIXELS
+        else:
+            raise ValueError(f"未知的拼接方向: {direction}")
 
-        # 保存拼接好的行
-        row_output_path = OUTPUT_DIR / f"stitched_row_{i + 1}.jpg"
-        cv2.imwrite(str(row_output_path), current_row_image)
-        stitched_rows.append(current_row_image)
-        tqdm.write(f"第 {i + 1} 行拼接完成, 已保存至 {row_output_path}")
-
-    # --- 4. 阶段二：垂直拼接所有行 ---
-    print("\n--- 阶段二: 垂直拼接所有行 ---")
-    if not stitched_rows:
-        print("错误: 没有成功拼接的行，无法进行垂直拼接。")
-        return
-
-    final_image = stitched_rows[0]
-
-    for i in tqdm(range(1, NUM_ROWS), desc="拼接行"):
-        # 实例化垂直拼接器
-        stitcher_v = ImageStitcherTemplateMatch(
-            estimate_overlap_pixels=ESTIMATE_OVERLAP_VERTICAL_PIXELS,
-            stitch_type="vertical",
+        # 每次都创建一个新的拼接器实例
+        stitcher = ImageStitcherTemplateMatch(
+            estimate_overlap_pixels=overlap_pixels,
+            stitch_type=direction,
             blend_type=BLEND_TYPE,
+            blend_ratio=BLEND_RATIO,
             light_uniformity_compensation_enabled=LIGHT_COMPENSATION,
-            light_uniformity_compensation_width=30,
+            light_uniformity_compensation_width=LIGHT_COMPENSATION_WIDTH,
             debug=DEBUG_MODE,
-            debug_dir=str(OUTPUT_DIR / f'debug_v_row{i}vs{i + 1}')
+            debug_dir=str(OUTPUT_DIR / f'debug_{result_name}')
         )
 
-        next_row_image = stitched_rows[i]
-        final_image = stitcher_v.stitch_main(final_image, next_row_image)
+        # 执行拼接
+        stitched_image = stitcher.stitch_main(img1, img2)
 
-    # --- 5. 保存最终结果 ---
-    final_output_path = OUTPUT_DIR / "final_stitched_image.jpg"
-    cv2.imwrite(str(final_output_path), final_image)
+        # 将新生成的图片存入字典，用于下一步拼接
+        images_dict[result_name] = stitched_image
+        final_image = stitched_image  # 始终保留最新的拼接结果
 
-    print("\n--- 所有拼接任务完成！---")
-    print(f"最终的全景图已保存至: {final_output_path}")
+        if DEBUG_MODE:
+            # 保存每一步的中间结果
+            intermediate_path = OUTPUT_DIR / f"intermediate_{result_name}.jpg"
+            cv2.imwrite(str(intermediate_path), stitched_image)
+
+    # --- 4. 保存最终结果 ---
+    if final_image is not None:
+        final_output_path = OUTPUT_DIR / "final_stitched_image.jpg"
+        cv2.imwrite(str(final_output_path), final_image)
+        print("\n--- 所有拼接任务完成！---")
+        print(f"最终的全景图已保存至: {final_output_path}")
+    else:
+        print("\n--- 拼接失败，没有生成最终图像 ---")
 
 
 def main():
@@ -116,7 +115,7 @@ def main():
     # --- 1. 配置参数 ---
 
     # 图片和输出目录设置
-    IMAGE_DIR = Path(r"C:\Code\ML\Project\StitchImageServer\temp\input\_250801_1142_0030")
+    IMAGE_DIR = Path(r"C:\Code\ML\Project\StitchImageServer\temp\input\front_0_1")
     # OUTPUT_DIR = Path(r"C:\Code\ML\Project\StitchImageServer\temp\output")
 
     # 拼图网格设置
@@ -126,9 +125,9 @@ def main():
     # ！！！关键拼接参数，您可能需要根据实际图片进行调整！！！
     # 预估水平方向重叠的像素数。如果您的图片宽1920像素，重叠25%，则该值为 1920 * 0.25 ≈ 480
     # 预估垂直方向重叠的像素数。如果您的图片高1080像素，重叠25%，则该值为 1080 * 0.25 ≈ 270
-    estimate_overlap_ratio = 0.45
-    ESTIMATE_OVERLAP_HORIZONTAL_PIXELS = int(round(1024 * estimate_overlap_ratio))
-    ESTIMATE_OVERLAP_VERTICAL_PIXELS = int(round(1024 * estimate_overlap_ratio))
+    # estimate_overlap_ratio = 0.45
+    ESTIMATE_OVERLAP_HORIZONTAL_PIXELS = 405
+    ESTIMATE_OVERLAP_VERTICAL_PIXELS = 440
 
     # 选择融合模式。'blend_half_importance_partial_HSV' 是效果最好但最慢的模式之一
     '''
@@ -144,9 +143,10 @@ def main():
     '''
 
     blend_type_list = ["half_importance_add_weight",
-                       "half_importance_global_brightness", "half_importance_partial_brightness",
-                       "blend_half_importance_partial_HV", "blend_half_importance_partial_SV",
-                       "blend_half_importance_partial_HSV", "blend_half_importance_partial_brightness_add_weight"]
+                       # "half_importance_global_brightness", "half_importance_partial_brightness",
+                       # "blend_half_importance_partial_HV", "blend_half_importance_partial_SV",
+                       # "blend_half_importance_partial_HSV", "blend_half_importance_partial_brightness_add_weight"
+                       ]
     # BLEND_TYPE = 'blend_half_importance_partial_HSV'
 
     # 是否开启光照补偿（推荐开启以获得更好效果）
@@ -164,13 +164,13 @@ def main():
         stitch_img(IMAGE_DIR=IMAGE_DIR, OUTPUT_DIR=OUTPUT_DIR, NUM_COLS=NUM_COLS, NUM_ROWS=NUM_ROWS,
                    ESTIMATE_OVERLAP_HORIZONTAL_PIXELS=ESTIMATE_OVERLAP_HORIZONTAL_PIXELS,
                    ESTIMATE_OVERLAP_VERTICAL_PIXELS=ESTIMATE_OVERLAP_VERTICAL_PIXELS,
-                   BLEND_TYPE=BLEND_TYPE, LIGHT_COMPENSATION=LIGHT_COMPENSATION,
+                   BLEND_TYPE=BLEND_TYPE, BLEND_RATIO=0.5,
+                   LIGHT_COMPENSATION=LIGHT_COMPENSATION, LIGHT_COMPENSATION_WIDTH=15,
                    DEBUG_MODE=DEBUG_MODE)
         print()
-        print("_"*20)
+        print("_" * 20)
         print(f"单个用时: {BLEND_TYPE}: {time.time() - one_img_time}")
-        print("_"*20)
-
+        print("_" * 20)
 
 
 if __name__ == '__main__':

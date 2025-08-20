@@ -3,7 +3,6 @@ from fastapi.middleware.cors import CORSMiddleware
 import logging
 
 from app.api.stitch import router as stitch_router
-from app.api.stitch_v2 import router as stitch_router_v2
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -24,4 +23,3 @@ app.add_middleware(
 
 
 app.include_router(stitch_router, prefix="/api")
-app.include_router(stitch_router_v2, prefix="/api")

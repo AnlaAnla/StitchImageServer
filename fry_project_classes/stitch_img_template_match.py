@@ -318,7 +318,7 @@ class ImageStitcherTemplateMatch(BlendTypeMixin):
         # 计算真正的重叠区域：右图的左边+模板宽度+左图的右边
         real_overlap_width = template_in_right_x + template.shape[1] + (
                     left_img.shape[1] - template_in_left_x - template.shape[1])
-
+ 
         if self.debug:
             with open(os.path.join(self.debug_dir, 'h_320_alignment_info.txt'), 'w') as f:
                 f.write(f"template_in_left_x: {template_in_left_x}\n")
