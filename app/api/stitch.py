@@ -20,6 +20,12 @@ TEMP_DIR = Path("_temp_work")
 TEMP_DIR.mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
+@router.get("/stitch", summary="获取拼图程序状态")
+async def state():
+    data = {
+        "stitch_server_on": True
+    }
+    return data
 
 @router.post("/", summary="通用拼图接口")
 async def stitch_puzzle(
