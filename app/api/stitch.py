@@ -19,13 +19,31 @@ router = APIRouter(prefix="/stitch", tags=['拼图'])
 TEMP_DIR = Path("_temp_work")
 TEMP_DIR.mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+stitch_server_on = True
 
-@router.get("/stitch", summary="获取拼图程序状态")
+
+@router.get("/state", summary="获取拼图程序状态")
 async def state():
+    global stitch_server_on
     data = {
-        "stitch_server_on": True
+        "stitch_server_on": stitch_server_on
     }
     return data
+
+
+@router.post("/server_on", summary="启动拼图服务")
+async def server_on():
+    global stitch_server_on
+    stitch_server_on = True
+    return {"stitch_server_on": stitch_server_on}
+
+
+@router.post("/server_off", summary="关闭拼图服务")
+async def server_off():
+    global stitch_server_on
+    stitch_server_on = False
+    return {"stitch_server_on": stitch_server_on}
+
 
 @router.post("/", summary="通用拼图接口")
 async def stitch_puzzle(
@@ -55,6 +73,10 @@ async def stitch_puzzle(
     - **如果只处理了一个文件夹**：直接返回拼接好的图片文件。
     - **如果处理了多个文件夹**：将结果打包成一个新的ZIP压缩包返回。
     """
+    global stitch_server_on
+    if not stitch_server_on:
+        raise HTTPException(status_code=500, detail="拼图服务未启动, 请求 /server_on 开启服务")
+
     request_id = str(uuid.uuid4())
     session_dir = TEMP_DIR / request_id
     session_dir.mkdir()
@@ -197,6 +219,10 @@ async def stitch_puzzle_from_folder(
     上传一个文件夹内的所有图片进行拼接，直接返回拼接好的单张大图。
     此接口专为无法或不便在客户端进行ZIP压缩的场景设计。
     """
+    global stitch_server_on
+    if not stitch_server_on:
+        raise HTTPException(status_code=500, detail="拼图服务未启动, 请求 /server_on 开启服务")
+
     if not files:
         raise HTTPException(status_code=400, detail="没有上传任何文件。")
 
