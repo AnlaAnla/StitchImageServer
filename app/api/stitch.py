@@ -19,7 +19,8 @@ router = APIRouter(prefix="/stitch", tags=['拼图'])
 TEMP_DIR = Path("_temp_work")
 TEMP_DIR.mkdir(exist_ok=True)
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-stitch_server_on = True
+stitch_server_on: bool = True
+stitch_num: int = 0
 
 
 @router.get("/state", summary="获取拼图程序状态")
@@ -30,6 +31,12 @@ async def state():
     }
     return data
 
+
+@router.get("/log", summary="获取拼图日志")
+async def log():
+    global stitch_num
+    data = f"服务已经拼图的批次为: {stitch_num} 批"
+    return data
 
 @router.post("/server_on", summary="启动拼图服务")
 async def server_on():
@@ -219,12 +226,13 @@ async def stitch_puzzle_from_folder(
     上传一个文件夹内的所有图片进行拼接，直接返回拼接好的单张大图。
     此接口专为无法或不便在客户端进行ZIP压缩的场景设计。
     """
-    global stitch_server_on
+    global stitch_server_on, stitch_num
     if not stitch_server_on:
         raise HTTPException(status_code=500, detail="拼图服务未启动, 请求 /server_on 开启服务")
 
     if not files:
         raise HTTPException(status_code=400, detail="没有上传任何文件。")
+    stitch_num += 1
 
     request_id = str(uuid.uuid4())
     session_dir = TEMP_DIR / request_id
