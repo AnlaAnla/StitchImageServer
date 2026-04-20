@@ -1,0 +1,8 @@
+fastapi
+numpy
+opencv_python
+opencv_python_headless
+Pillow
+requests
+tqdm
+uvicorn
